@@ -1,4 +1,4 @@
-use std::process::Command;
+use std::{env::consts::OS, process::Command};
 
 use futures_util::{SinkExt, StreamExt, TryFutureExt};
 use warp::{
@@ -29,10 +29,18 @@ async fn message(ws: WebSocket) {
                 }
                 println!("Received command: {:?}", command);
 
-                let result = Command::new("cmd")
-                    .args(&["/C", command.as_str()])
-                    .output()
-                    .unwrap();
+                let result;
+                if OS == "windows" {
+                    result = Command::new("cmd")
+                        .args(&["/C", command.as_str()])
+                        .output()
+                        .unwrap();
+                } else {
+                    result = Command::new("sh")
+                        .args(&["-c", command.as_str()])
+                        .output()
+                        .unwrap();
+                }
                 let txt = String::from_utf8_lossy(&result.stdout).to_string();
                 println!("output: {}", txt);
 
