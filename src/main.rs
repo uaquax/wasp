@@ -1,80 +1,48 @@
-#[macro_use]
-extern crate rocket;
+use std::process::Command;
 
-use rocket::http::Method;
-use rocket::serde::{json::Json, Deserialize, Serialize};
-use rocket_cors::{AllowedOrigins, CorsOptions};
-use serde_json::{json, Value};
-use sysinfo::{CpuExt, DiskExt, NetworkExt, System, SystemExt};
+use futures_util::{SinkExt, StreamExt, TryFutureExt};
+use warp::{
+    filters::ws::{Message, WebSocket},
+    Filter,
+};
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(crate = "rocket::serde")]
-struct Network {
-    pub name: String,
-    pub total_income: u64,
-    pub total_outcome: u64,
+#[tokio::main]
+async fn main() {
+    pretty_env_logger::init();
+
+    let routes = warp::path("terminal")
+        .and(warp::ws())
+        .map(|ws: warp::ws::Ws| ws.on_upgrade(move |socket| message(socket)));
+
+    warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(crate = "rocket::serde")]
-struct Disk {
-    pub name: String,
-    pub size: u64,
-    pub free: u64,
-    pub file_system: String,
-}
+async fn message(ws: WebSocket) {
+    let (mut tx, mut rx) = ws.split();
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(crate = "rocket::serde")]
-struct SysInfo {
-    pub cpu: Value,
-    pub ram: u64,
-    pub ram_used: u64,
-    pub uptime: u64,
-    pub os: Option<String>,
-    pub networks: Vec<Network>,
-    pub disks: Vec<Disk>,
-}
+    while let Some(res) = rx.next().await {
+        match res {
+            Ok(msg) => {
+                let command = String::from_utf8_lossy(msg.as_bytes()).to_string();
+                if command == "PING" {
+                    continue;
+                }
+                println!("Received command: {:?}", command);
 
-#[get("/api/sysinfo")]
-fn index() -> Json<SysInfo> {
-    let sys = System::new_all();
-    let cpu = sys.cpus().first().unwrap();
-    let networks = sys
-        .networks()
-        .into_iter()
-        .map(|net| Network {
-            name: net.0.to_string(),
-            total_income: net.1.total_received(),
-            total_outcome: net.1.total_transmitted(),
-        })
-        .collect();
-    let disks = sys
-        .disks()
-        .into_iter()
-        .map(|disk| Disk {
-            name: disk.name().to_string_lossy().to_string(),
-            size: disk.total_space(),
-            free: disk.available_space(),
-            file_system: std::str::from_utf8(disk.file_system()).unwrap().to_string(),
-        })
-        .collect();
+                let result = Command::new("cmd")
+                    .args(&["/C", command.as_str()])
+                    .output()
+                    .unwrap();
+                let txt = String::from_utf8_lossy(&result.stdout).to_string();
+                println!("output: {}", txt);
 
-    Json(SysInfo {
-        cpu: json!({"brand": cpu.brand(), "frequency":  cpu.frequency()}),
-        ram: sys.total_memory(),
-        ram_used: sys.used_memory(),
-        uptime: sys.uptime(),
-        os: sys.long_os_version(),
-        networks: networks,
-        disks: disks,
-    })
-}
-
-#[launch]
-fn rocket() -> _ {
-    // let cors = CorsOptions::default().allow_credentials(true);
-    rocket::build()
-        // .manage(cors.to_cors())
-        .mount("/", routes![index])
+                tx.send(Message::text(txt))
+                    .unwrap_or_else(|e| eprintln!("websocket send error: {}", e))
+                    .await;
+            }
+            Err(e) => {
+                eprintln!("websocket error: {:?}", e);
+            }
+        }
+    }
 }
