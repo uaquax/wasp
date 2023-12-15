@@ -1,6 +1,7 @@
 use std::{env::consts::OS, process::Command};
 
 use futures_util::{SinkExt, StreamExt, TryFutureExt};
+use serde_json::{json, to_string};
 use warp::{
     filters::ws::{Message, WebSocket},
     Filter,
@@ -27,6 +28,14 @@ async fn message(ws: WebSocket) {
                 if command == "PING" {
                     continue;
                 }
+
+                if command == "%SYS_INFO%" {
+                    let something = json!({"os": "Win11"}).to_string();
+                    tx.send(Message::text(something))
+                        .unwrap_or_else(|e| eprintln!("websocket send error: {}", e))
+                        .await;
+                }
+
                 println!("Received command: {:?}", command);
 
                 let result;
